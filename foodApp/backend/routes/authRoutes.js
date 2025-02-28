@@ -1,5 +1,6 @@
 import express from "express";
-import jwt from "jsonwebtoken";
+import { loginUser } from "../controllers/authController.js";
+
 import {
   registerUser,
   findUserByUsername,
@@ -8,7 +9,7 @@ import {
 import { body, validationResult } from "express-validator";
 
 const router = express.Router();
-const SECRET_KEY = "your_secret_key"; //env
+const SECRET_KEY = "shahjee"; //env
 
 // Signup Route
 router.post(
@@ -39,38 +40,19 @@ router.post(
 );
 
 // Login Route
-router.post(
-  "/login",
-  [body("username").trim().escape(), body("password").notEmpty()],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
+router.post("/login", async (req, res) => {
+  console.log("🔹 Received Body:", req.body); // Debugging
+  try {
     const { username, password } = req.body;
-    try {
-      const user = await findUserByUsername(username);
-      if (!user) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
-
-      const isValidPassword = await verifyPassword(password, user.password);
-      if (!isValidPassword) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
-
-      const token = jwt.sign(
-        { userId: user.id, username: user.username },
-        SECRET_KEY,
-        { expiresIn: "1h" }
-      );
-
-      res.status(200).json({ message: "Login successful", token });
-    } catch (error) {
-      res.status(500).json({ message: "Login error", error });
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password required" });
     }
+
+    const response = await loginUser(req, res);
+    res.json(response);
+  } catch (error) {
+    res.status(401).json({ error: error.message });
   }
-);
+});
 
 export default router;

@@ -1,5 +1,6 @@
 import pool from "./db.js";
 import bcrypt from "bcryptjs";
+
 async function testConnection() {
   try {
     const res = await pool.query("SELECT NOW();");
@@ -10,6 +11,36 @@ async function testConnection() {
 }
 
 testConnection();
+
+//Login Function
+export const loginUser = async (username, password) => {
+  const result = await pool.query("SELECT * FROM users WHERE username =$1", [
+    username,
+  ]);
+
+  if (!result.rows.length) {
+    throw new Error("User Not FOund");
+  }
+
+  const user = result.rows[0];
+
+  //Verify Password
+  const isMatch = await bcrypt.compare(password, user.password);
+  if (!isMatch) {
+    throw new Error("Invalid Password");
+  }
+
+  return { token, user: { id: user.id, username: user.username } };
+};
+
+//Saving AI Responses
+export const saveAIResponse = async (userId, query, response) => {
+  const result = await pool.query(
+    "INSERT INTO ai_responses (user_id, query, response) VALUE ($1,$2,$3) RETURNING *",
+    [userId, query, response]
+  );
+  return result.rows[0];
+};
 
 //Create a new user with hashed password
 export const registerUser = async (username, password) => {
