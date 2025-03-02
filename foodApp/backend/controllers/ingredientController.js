@@ -1,16 +1,53 @@
 import axios from "axios";
+import pool from "../db.js"; // Import database connection
 import { API_KEY, API_URL } from "../config/dotenvConfig.js";
+import redisClient from "../cache.js";
+import slugify from "slugify";
 
 export const getIngredients = async (req, res) => {
-  const { dish } = req.body;
+  const { dish, servings } = req.body;
 
-  if (!dish) {
-    return res.status(400).json({ error: "Dish name is required" });
+  if (!dish || !servings) {
+    return res.status(400).json({ error: "Dish name and servings required" });
   }
 
-  const prompt = `List only the ingredients and their serving quantities for '${dish}' in JSON format. Each ingredient should be an object with 'name' and 'quantity'.`;
-
   try {
+    const dishSlug = slugify(dish, { lower: true, strict: true });
+    const cacheKey = `ingredients:${dishSlug}:${servings}`;
+    const cachedData = await redisClient.get(cacheKey);
+
+    if (cachedData) {
+      console.log("✅ Retrieved from cache");
+      return res.json({ ingredients: JSON.parse(cachedData) });
+    }
+
+    console.log("❌ Not in cache, checking DB...");
+
+    // Check Database
+    const dbQuery = await pool.query(
+      "SELECT response FROM ai_responses WHERE query = $1 AND servings = $2",
+      [dish, servings]
+    );
+
+    if (dbQuery.rows.length > 0) {
+      console.log("✅ Retrieved from database");
+      const dbData = dbQuery.rows[0].response;
+
+      // Store in cache
+      await redisClient.setex(
+        cacheKey,
+        43200,
+        JSON.stringify(formattedIngredients)
+      ); // 43200 seconds = 12 hours
+
+      return res.json({ ingredients: dbData });
+    }
+
+    console.log("❌ Not in DB, calling AI...");
+
+    // AI Call
+    const prompt = `List only the ingredients and their serving quantities for '${dish}' for ${servings} servings in JSON format. Each ingredient should be an object with 'name' and 'quantity'.`;
+
     const response = await axios.post(
       API_URL,
       {
@@ -26,63 +63,40 @@ export const getIngredients = async (req, res) => {
       }
     );
 
-    // Check if response structure is valid
-    if (
-      !response.data ||
-      !response.data.choices ||
-      !response.data.choices.length
-    ) {
-      console.error("Unexpected API Response:", response.data);
-      return res.status(500).json({
-        error: "Invalid API response structure",
-        details: response.data,
-      });
-    }
-
     const aiResponse = response.data.choices[0].message.content;
 
-    // Debugging: Log raw response
-    console.log("Raw AI Response:", aiResponse);
-
-    // Extract JSON more reliably
+    // Extract JSON
     const jsonMatch = aiResponse.match(/```json\s*([\s\S]*?)\s*```/);
     const cleanJson = jsonMatch ? jsonMatch[1].trim() : aiResponse.trim();
+    const parsedData = JSON.parse(cleanJson);
 
-    let parsedData;
-    try {
-      parsedData = JSON.parse(cleanJson);
-    } catch (jsonError) {
-      console.error("JSON Parsing Error:", jsonError.message);
-      console.error("Raw Response:", aiResponse); // Debugging raw response
-      return res.status(500).json({
-        error: "Invalid JSON format in API response",
-        rawResponse: aiResponse, // Send raw response for debugging
-        details: jsonError.message,
-      });
-    }
-
-    // Ensure the expected format
     if (!parsedData.ingredients || !Array.isArray(parsedData.ingredients)) {
-      console.error("Unexpected JSON Format:", parsedData);
-      return res
-        .status(500)
-        .json({ error: "Invalid ingredients format", details: parsedData });
+      return res.status(500).json({ error: "Invalid ingredients format" });
     }
 
-    // Format the ingredients correctly
     const formattedIngredients = parsedData.ingredients.map((item) => ({
       name: item.name,
       quantity: item.quantity,
     }));
 
-    console.log("Formatted Ingredients:", formattedIngredients);
+    console.log("✅ AI Response Processed:", formattedIngredients);
+
+    // Save to DB
+    await pool.query(
+      "INSERT INTO ai_responses (user_id, query, servings, response) VALUES ($1, $2, $3, $4)",
+      [req.user.id, dish, servings, JSON.stringify(formattedIngredients)]
+    );
+
+    // Save to Redis
+    await redisClient.setEx(
+      cacheKey,
+      3600,
+      JSON.stringify(formattedIngredients)
+    );
 
     res.json({ ingredients: formattedIngredients });
   } catch (error) {
     console.error("API Error:", error.response?.data || error.message);
-    res.status(500).json({
-      error: "Error fetching ingredients",
-      details: error.response?.data || error.message,
-    });
+    res.status(500).json({ error: "Error fetching ingredients" });
   }
 };
