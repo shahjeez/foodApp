@@ -12,7 +12,7 @@ const api = axios.create({
 export const fetchIngredients = async (dish, servings, token) => {
   try {
     const response = await api.post(
-      "/get-ingredients",
+      "/api/ai/get-ingredients",
       { dish, servings },
       { headers: { Authorization: `Bearer ${token}` } }
     );
@@ -21,6 +21,12 @@ export const fetchIngredients = async (dish, servings, token) => {
     console.error("Error fetching ingredients:", error);
     throw error;
   }
+};
+
+// Login API Request
+export const loginUser = async (email, password) => {
+  const response = await api.post("/api/auth/login", { email, password });
+  return response.data;
 };
 
 export default api;
